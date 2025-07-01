@@ -38,6 +38,8 @@
   },
   "dependencies": {
     "@cherrystudio/mac-system-ocr": "^0.2.2",
+    "@langchain/langgraph": "^0.3.6",
+    "@langchain/openai": "^0.5.16",
     "chokidar": "^4.0.3",
     "dotenv": "^17.0.1",
     "electron-squirrel-startup": "^1.0.1",

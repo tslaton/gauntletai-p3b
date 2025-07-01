@@ -19,6 +19,7 @@ declare global {
 interface ActivityItem {
   id: string;
   filename: string;
+  newFilename?: string;
   status: 'parsing' | 'extracting' | 'renaming' | 'completed' | 'error';
   message: string;
   timestamp: Date;
@@ -58,12 +59,27 @@ class PDFRenamerApp {
     
     if (watchFolderInput) watchFolderInput.value = this.config.watchFolder || '';
     if (apiKeyInput) apiKeyInput.value = this.config.openaiApiKey || '';
-    if (modelSelect) modelSelect.value = this.config.llmModel || 'gpt-3.5-turbo';
+    if (modelSelect) modelSelect.value = this.config.llmModel || 'gpt-4.1-nano';
+    
+    // Show/hide API key banner
+    const banner = document.getElementById('api-key-banner');
+    if (banner) {
+      if (!this.config.openaiApiKey) {
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+    }
   }
   
   private setupEventListeners() {
     // Settings button
     document.getElementById('settings-btn')?.addEventListener('click', () => {
+      document.getElementById('settings-modal')?.classList.remove('hidden');
+    });
+    
+    // Banner settings button
+    document.getElementById('banner-settings-btn')?.addEventListener('click', () => {
       document.getElementById('settings-modal')?.classList.remove('hidden');
     });
     
@@ -133,11 +149,16 @@ class PDFRenamerApp {
     
     // Listen for processing updates
     window.electronAPI.onProcessingUpdate((data) => {
-      const filename = data.path.split('/').pop() || data.path;
+      const filename = (data.originalPath || data.path).split('/').pop() || data.path;
       const activity = this.activities.find(a => a.filename === filename);
       
       if (activity) {
         activity.status = data.status;
+        
+        // Store the new filename if available
+        if (data.newPath) {
+          activity.newFilename = data.newPath.split('/').pop() || data.newPath;
+        }
         
         switch (data.status) {
           case 'parsing':
@@ -150,7 +171,11 @@ class PDFRenamerApp {
             activity.message = 'Renaming file...';
             break;
           case 'completed':
-            activity.message = `Renamed successfully`;
+            if (activity.newFilename) {
+              activity.message = `Renamed to: ${activity.newFilename}`;
+            } else {
+              activity.message = `Renamed successfully`;
+            }
             break;
           case 'error':
             activity.message = `Error: ${data.error || 'Unknown error'}`;
@@ -184,7 +209,7 @@ class PDFRenamerApp {
         <div class="activity-item">
           <div class="activity-status ${activity.status}"></div>
           <div class="activity-content">
-            <div class="activity-filename">${activity.filename}</div>
+            <div class="activity-filename">${activity.filename}${activity.newFilename && activity.status === 'completed' ? ` → ${activity.newFilename}` : ''}</div>
             <div class="activity-message">${activity.message}</div>
           </div>
         </div>

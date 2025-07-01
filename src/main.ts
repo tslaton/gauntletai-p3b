@@ -6,7 +6,7 @@ import started from 'electron-squirrel-startup';
 const Store = require('electron-store').default || require('electron-store');
 import chokidar from 'chokidar';
 import { config } from 'dotenv';
-import { PDFProcessor } from './pdfProcessor';
+import { createPDFPipeline, type PDFState } from './pdfPipeline';
 
 config();
 
@@ -19,15 +19,31 @@ const store = new Store();
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let watcher: chokidar.FSWatcher | null = null;
-let pdfProcessor: PDFProcessor;
+// Track renamed files to avoid processing them again
+const renamedFiles = new Set<string>();
+
+// Pipeline instance - cached and reused
+let pdfPipeline: ReturnType<typeof createPDFPipeline> | null = null;
+let currentPipelineConfig = { openaiApiKey: '', llmModel: '' };
 
 // Configuration
-let WATCH_FOLDER = (store as any).get('watchFolder', path.join(os.homedir(), 'Desktop', 'pdfs')) as string;
+let WATCH_FOLDER = (store as any).get('watchFolder', path.join(os.homedir(), 'Documents', 'inbox')) as string;
 let OPENAI_API_KEY = process.env.OPENAI_API_KEY || (store as any).get('openaiApiKey', '') as string;
-let LLM_MODEL = process.env.LLM_MODEL || (store as any).get('llmModel', 'gpt-3.5-turbo') as string;
+let LLM_MODEL = process.env.LLM_MODEL || (store as any).get('llmModel', 'gpt-4.1-nano') as string;
 
-// Initialize PDF processor
-pdfProcessor = new PDFProcessor(OPENAI_API_KEY, LLM_MODEL);
+// Initialize pipeline with current config
+function initializePipeline() {
+  if (!pdfPipeline || 
+      currentPipelineConfig.openaiApiKey !== OPENAI_API_KEY || 
+      currentPipelineConfig.llmModel !== LLM_MODEL) {
+    console.log('Creating new PDF pipeline with updated configuration');
+    pdfPipeline = createPDFPipeline(OPENAI_API_KEY, LLM_MODEL);
+    currentPipelineConfig = { openaiApiKey: OPENAI_API_KEY, llmModel: LLM_MODEL };
+  }
+  return pdfPipeline;
+}
+
+// Configuration will be used when processing PDFs
 
 // Ensure watch folder exists
 if (!fs.existsSync(WATCH_FOLDER)) {
@@ -91,7 +107,7 @@ const createTray = () => {
     }
   ]);
   
-  tray.setToolTip('PDF AI Renamer');
+  tray.setToolTip('File Wrangler');
   tray.setContextMenu(contextMenu);
   
   tray.on('click', () => {
@@ -127,6 +143,13 @@ const setupWatcher = () => {
       return;
     }
     
+    // Skip if this is a file we renamed (avoid reprocessing our output)
+    if (renamedFiles.has(filePath)) {
+      console.log('Skipping renamed file:', filePath);
+      renamedFiles.delete(filePath); // Clean up after detection
+      return;
+    }
+    
     console.log('PDF detected:', filePath);
     mainWindow?.webContents.send('pdf-added', filePath);
     
@@ -143,7 +166,7 @@ const setupWatcher = () => {
     }
   });
   
-  watcher.on('error', (error) => {
+  watcher.on('error', (error: Error) => {
     console.error('Watcher error:', error);
   });
   
@@ -152,7 +175,7 @@ const setupWatcher = () => {
   });
   
   // Also watch for all events to debug
-  watcher.on('all', (event, path) => {
+  watcher.on('all', (event: string, path: string) => {
     console.log('Watcher event:', event, path);
   });
   
@@ -167,6 +190,8 @@ ipcMain.handle('get-config', () => ({
 }));
 
 ipcMain.handle('update-config', (_event, config) => {
+  const oldWatchFolder = WATCH_FOLDER;
+  
   if (config.watchFolder) {
     (store as any).set('watchFolder', config.watchFolder);
     WATCH_FOLDER = config.watchFolder;
@@ -174,17 +199,29 @@ ipcMain.handle('update-config', (_event, config) => {
   if (config.openaiApiKey) {
     (store as any).set('openaiApiKey', config.openaiApiKey);
     OPENAI_API_KEY = config.openaiApiKey;
-    pdfProcessor.updateConfig(config.openaiApiKey, LLM_MODEL);
   }
   if (config.llmModel) {
     (store as any).set('llmModel', config.llmModel);
     LLM_MODEL = config.llmModel;
-    pdfProcessor.updateConfig(OPENAI_API_KEY, config.llmModel);
   }
   
   // Restart watcher if folder changed
-  if (config.watchFolder && config.watchFolder !== WATCH_FOLDER) {
+  if (config.watchFolder && config.watchFolder !== oldWatchFolder) {
+    console.log('Watch folder changed from', oldWatchFolder, 'to', config.watchFolder);
+    
+    // Ensure new watch folder exists
+    if (!fs.existsSync(WATCH_FOLDER)) {
+      console.log('Creating new watch folder:', WATCH_FOLDER);
+      fs.mkdirSync(WATCH_FOLDER, { recursive: true });
+    }
+    
     setupWatcher();
+  }
+  
+  // Reinitialize pipeline if API key or model changed
+  if ((config.openaiApiKey && config.openaiApiKey !== currentPipelineConfig.openaiApiKey) ||
+      (config.llmModel && config.llmModel !== currentPipelineConfig.llmModel)) {
+    pdfPipeline = null; // Force recreation on next use
   }
   
   return true;
@@ -215,14 +252,60 @@ ipcMain.handle('process-pdf', async (_event, filePath: string) => {
 
 // Helper function to process PDF
 async function processPDFFile(filePath: string) {
-  await pdfProcessor.processPDF(filePath, (state) => {
-    mainWindow?.webContents.send('processing-update', state);
-  });
+  const pipeline = initializePipeline();
   
-  new Notification({
-    title: 'PDF Renamed',
-    body: `Successfully processed: ${path.basename(filePath)}`
-  }).show();
+  const initialState: PDFState = {
+    path: filePath
+  };
+  
+  let currentState: PDFState = initialState;
+  
+  // Send initial state
+  mainWindow?.webContents.send('processing-update', { ...currentState });
+  
+  // Run the pipeline
+  const stream = await pipeline.stream(initialState);
+  
+  for await (const chunk of stream) {
+    // Update state with each step's output
+    const [nodeName, nodeOutput] = Object.entries(chunk)[0];
+    currentState = { ...currentState, ...nodeOutput } as PDFState;
+    
+    // Map node names to status
+    let status: string;
+    switch (nodeName) {
+      case 'parse':
+        status = 'parsing';
+        break;
+      case 'llm':
+        status = 'extracting';
+        break;
+      case 'rename':
+        status = currentState.error ? 'error' : 'completed';
+        break;
+      default:
+        status = 'processing';
+    }
+    
+    mainWindow?.webContents.send('processing-update', {
+      ...currentState,
+      status,
+      originalPath: filePath,
+    });
+  }
+  
+  if (currentState.newPath) {
+    // Add the new path to renamed files to avoid reprocessing
+    renamedFiles.add(currentState.newPath);
+    
+    // Log the rename for debugging
+    console.log(`PDF renamed: ${path.basename(filePath)} → ${path.basename(currentState.newPath)}`);
+    
+    new Notification({
+      title: 'PDF Renamed',
+      body: `${path.basename(filePath)} → ${path.basename(currentState.newPath)}`
+    }).show();
+  }
 }
 
 // This method will be called when Electron has finished
@@ -260,3 +343,51 @@ declare global {
     }
   }
 }
+
+// Cleanup function
+function cleanup() {
+  console.log('Cleaning up before exit...');
+  
+  // Close file watcher
+  if (watcher) {
+    watcher.close();
+    watcher = null;
+  }
+  
+  // Destroy tray
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
+  
+  // Close all windows
+  BrowserWindow.getAllWindows().forEach(window => {
+    window.destroy();
+  });
+}
+
+// Handle process termination signals
+process.on('SIGINT', () => {
+  console.log('Received SIGINT, cleaning up...');
+  cleanup();
+  app.quit();
+});
+
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM, cleaning up...');
+  cleanup();
+  app.quit();
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  cleanup();
+  app.quit();
+});
+
+// Handle app quit
+app.on('before-quit', () => {
+  console.log('App is quitting...');
+  cleanup();
+});

@@ -2,14 +2,21 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>PDF AI Renamer</title>
+    <title>File Wrangler</title>
   </head>
   <body>
     <div id="app">
       <header class="header">
-        <h1>PDF AI Renamer</h1>
+        <h1>File Wrangler</h1>
         <button id="settings-btn" class="settings-btn">⚙️ Settings</button>
       </header>
+      
+      <!-- API Key Warning Banner -->
+      <div id="api-key-banner" class="api-key-banner hidden">
+        <div class="banner-content">
+          <span>⚠️ OpenAI API key is not set. Please configure it in Settings to enable PDF processing.</span>
+        </div>
+      </div>
       
       <main class="main">
         <div class="watch-folder">
@@ -52,9 +59,8 @@
             <div class="form-group">
               <label for="model-select">LLM Model</label>
               <select id="model-select">
-                <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                <option value="gpt-4">GPT-4</option>
-                <option value="gpt-4-turbo-preview">GPT-4 Turbo</option>
+                <option value="gpt-4.1-nano">GPT-4.1-nano</option>
+                <option value="gpt-4.1">GPT-4.1</option>
               </select>
             </div>
           </div>
