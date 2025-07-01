@@ -20,7 +20,7 @@ export interface PDFState {
 }
 
 // Factory function to create pipeline with current configuration
-export function createPDFPipeline(openaiApiKey: string, llmModel: string) {
+export function createPDFPipeline(openaiApiKey: string, llmModel: string, useLowercase: boolean = true) {
   // Create the model instance once for this pipeline
   const model = openaiApiKey ? new ChatOpenAI({
     modelName: llmModel || 'gpt-4.1-nano',
@@ -102,10 +102,16 @@ ${state.rawText.slice(0, 12000)}
     
     try {
       const dir = path.dirname(state.path);
-      const newName = `${state.meta.date} ${state.meta.title} [${state.meta.addressee}].pdf`;
+      let newName = `${state.meta.date} ${state.meta.title} [${state.meta.addressee}].pdf`;
       
       // Clean filename for filesystem
-      const cleanName = newName.replace(/[<>:"/\\|?*]/g, '-');
+      let cleanName = newName.replace(/[<>:"/\\|?*]/g, '-');
+      
+      // Apply lowercase if configured
+      if (useLowercase) {
+        cleanName = cleanName.toLowerCase();
+      }
+      
       const newPath = path.join(dir, cleanName);
       
       // Check if file already exists

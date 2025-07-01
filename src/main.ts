@@ -24,21 +24,23 @@ const renamedFiles = new Set<string>();
 
 // Pipeline instance - cached and reused
 let pdfPipeline: ReturnType<typeof createPDFPipeline> | null = null;
-let currentPipelineConfig = { openaiApiKey: '', llmModel: '' };
+let currentPipelineConfig = { openaiApiKey: '', llmModel: '', useLowercase: true };
 
 // Configuration
 let WATCH_FOLDER = (store as any).get('watchFolder', path.join(os.homedir(), 'Documents', 'inbox')) as string;
 let OPENAI_API_KEY = process.env.OPENAI_API_KEY || (store as any).get('openaiApiKey', '') as string;
 let LLM_MODEL = process.env.LLM_MODEL || (store as any).get('llmModel', 'gpt-4.1-nano') as string;
+let USE_LOWERCASE = (store as any).get('useLowercase', true) as boolean;
 
 // Initialize pipeline with current config
 function initializePipeline() {
   if (!pdfPipeline || 
       currentPipelineConfig.openaiApiKey !== OPENAI_API_KEY || 
-      currentPipelineConfig.llmModel !== LLM_MODEL) {
+      currentPipelineConfig.llmModel !== LLM_MODEL ||
+      currentPipelineConfig.useLowercase !== USE_LOWERCASE) {
     console.log('Creating new PDF pipeline with updated configuration');
-    pdfPipeline = createPDFPipeline(OPENAI_API_KEY, LLM_MODEL);
-    currentPipelineConfig = { openaiApiKey: OPENAI_API_KEY, llmModel: LLM_MODEL };
+    pdfPipeline = createPDFPipeline(OPENAI_API_KEY, LLM_MODEL, USE_LOWERCASE);
+    currentPipelineConfig = { openaiApiKey: OPENAI_API_KEY, llmModel: LLM_MODEL, useLowercase: USE_LOWERCASE };
   }
   return pdfPipeline;
 }
@@ -187,6 +189,7 @@ ipcMain.handle('get-config', () => ({
   watchFolder: WATCH_FOLDER,
   openaiApiKey: OPENAI_API_KEY,
   llmModel: LLM_MODEL,
+  useLowercase: USE_LOWERCASE,
 }));
 
 ipcMain.handle('update-config', (_event, config) => {
@@ -204,6 +207,10 @@ ipcMain.handle('update-config', (_event, config) => {
     (store as any).set('llmModel', config.llmModel);
     LLM_MODEL = config.llmModel;
   }
+  if (config.useLowercase !== undefined) {
+    (store as any).set('useLowercase', config.useLowercase);
+    USE_LOWERCASE = config.useLowercase;
+  }
   
   // Restart watcher if folder changed
   if (config.watchFolder && config.watchFolder !== oldWatchFolder) {
@@ -218,9 +225,10 @@ ipcMain.handle('update-config', (_event, config) => {
     setupWatcher();
   }
   
-  // Reinitialize pipeline if API key or model changed
+  // Reinitialize pipeline if API key, model, or lowercase setting changed
   if ((config.openaiApiKey && config.openaiApiKey !== currentPipelineConfig.openaiApiKey) ||
-      (config.llmModel && config.llmModel !== currentPipelineConfig.llmModel)) {
+      (config.llmModel && config.llmModel !== currentPipelineConfig.llmModel) ||
+      (config.useLowercase !== undefined && config.useLowercase !== currentPipelineConfig.useLowercase)) {
     pdfPipeline = null; // Force recreation on next use
   }
   
