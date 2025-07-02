@@ -10,9 +10,13 @@ The intended use is you can leave this app running and process pdfs as from emai
 
 You can also drag and drop any files you want processed.
 
+Your badly-named pdfs will be automatically renamed like: `yyyy-mm-dd ${title} [${addressee}].pdf` and optionally, lower-cased.
+
+eg., `scan0001.pdf` -> `2025-07-01 pacifc gas and electric bill details [trevor].pdf`
+
 # Development
 
-This program is developed using Electron.
+This program is developed using [Electron](https://www.electronjs.org/).
 
 To start the development server:
 
@@ -20,3 +24,7 @@ To start the development server:
 npm install
 npm start
 ```
+
+# Rationale
+
+See [Possible problem spaces](./_docs/presearch/product/Possible problem spaces.md)
